@@ -1,6 +1,6 @@
 # Albert le frigidaire
 
-A box to make your fridge connected.
+A box to monitor your fridge without having to buy an expensive smart fridge.
 
 ![dashboard](dashboard.png)
 
@@ -12,7 +12,7 @@ This project made by six INSA Lyon students for a second year class. It uses Ard
 
 The goal of the project is to make an inexpensive box that you can put in your fridge to monitor it from an application. The final result is the white box above, along with the monitoring app.
 
-The box has many sensors to collect data on the temperature, the humidity, the concentration of six gases, and the light itensity to know if the fridge is open. The app displays graphs of those values and give you alerts when certain thresholds are crossed, for example if the temperature is too high, or the fridge has been open for too long.
+The box has many sensors to collect data on the temperature, the humidity, the concentration of six gases and the light itensity to know if the fridge is open. The app displays graphs of those values and give you alerts when certain thresholds are crossed, for example if the temperature is too high, or the fridge has been open for too long.
 
 The box also have a barcode reader, to scan the products you put into your fridge. There is a button to set if you are adding or removing products. This way, the app has an up-to-date list of the products in your fridge, and can display informations about them, provided by the [Open Food Facts](https://world.openfoodfacts.org/) database. In addition, sensors theresholds dynamically adapt to the contents of your fridge.
 
