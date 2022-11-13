@@ -102,7 +102,7 @@ public class JavaArduino {
             BufferedReader input;
 
             // Ajout codebarres
-            file = new FileInputStream("./fichiers/input/codebarres.txt");
+            file = new FileInputStream("./files/data/codebarres.txt");
             input = new BufferedReader(new InputStreamReader(file));
             while ((line = input.readLine()) != null) {
                 if (line.length() > 0) {
@@ -115,7 +115,7 @@ public class JavaArduino {
             communicationBD.majQuantite(true);
             input.close();
 
-            file = new FileInputStream("./fichiers/input/codebarres.txt");
+            file = new FileInputStream("./files/data/codebarres.txt");
             input = new BufferedReader(new InputStreamReader(file));
             while ((line = input.readLine()) != null) {
                 if (line.length() > 0) {

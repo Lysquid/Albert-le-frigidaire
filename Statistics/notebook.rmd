@@ -1,0 +1,669 @@
+---
+title: "Phase de projet P5 Statistiques du groupe 221-A"
+output:
+  html_document:
+    df_print: paged
+    toc : true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+![](C:\Users\thoma\Pictures\Saved Pictures\photofamille.png)
+
+# **Descriptif du projet**
+
+### **Présentation générale**
+
+Comme nous avons déjà pu l’expliquer dans les comptes rendus précédents, notre projet consiste en la conception d’un boîtier de monitoring pour réfrigérateur. Il peut être mis dans n’importe quel frigo, et s’assure que les conditions ambiantes sont propices à la bonne conservation des aliments. Il permet aussi de scanner les produits que l’on ajoute puis que l’on retire de son réfrigérateur, pour connaître en temps réel son contenu par exemple lorsque l’on fait des courses. Ces deux aspects sont liés par le fait que le boîtier adapte intelligemment ses alertes de conservation en fonction des produits présents dans le réfrigérateur.
+
+![*Figure 1. Photographie de notre montage*](C:\Users\thoma\Pictures\Saved Pictures\projet.png)
+
+
+
+
+
+
+
+### **Capteurs et mesures**
+
+* Afin de pouvoir réaliser toutes les mesures nécessaires, nous avons décidé d’utiliser cinq capteurs : 
+
+  + une thermistance pour la température,
+  + une photorésistance pour savoir si le réfrigérateur est ouvert ou fermé,
+  + un capteur de gaz qui mesure les concentrations de huit gaz différents,
+  + un capteur d’humidité,
+  + un lecteur de codes-barres, 
+
+L’architecture précise et l’interfaçage des capteurs sont détaillés dans le compte rendu de la phase projet P2.
+
+La luminosité et les codes-barres sont relevés ponctuellement. En effet, la photorésistance est montée dans un comparateur qui renvoie soit une tension de 5V soit une tension nulle que nous utilisons donc comme une valeur booléenne (frigo ouvert ou fermé). Nous n’avons donc besoin de stocker cette information que lors d’un changement d’état. Le scan d’un code-barre est lui aussi dépendant de l’utilisateur. Les mesures de température, d’humidité et de gaz sont quant à elles réalisées toutes les cinq secondes car nous avons besoin d’une fréquence assez élevée afin de détecter rapidement les problèmes et présenter des graphes intéressants.
+
+### **Consultation des données**
+
+La consultation des données se fera via une application Java avec une interface homme machine. Les valeurs de température, d’humidité et de gaz seront récupérées puis traitées pour être affichées sous forme de graphiques en temps réel.
+  L’interface utilisateur présentera aussi la liste des produits contenus dans le frigo, avec leur quantité. Pour accéder aux informations sur les produits à partir de leur code barre, nous faisons appel à la base de données libre Open Food Facts. Nous avons ainsi accès par exemple au nom du produit, aux catégories auxquelles il appartient, ses valeurs nutritionnelles ou encore des images que nous essaierons d’afficher.
+Notre projet intègre finalement un système d’alerte. Les catégories de produits peuvent en effet faire l’objet d’un seuil de conservation relatif à une certaine grandeur physique (une certaine température à ne pas dépasser, un taux d’humidité minimum, …). Lorsqu’un seuil est franchi et que des produits de cette catégorie sont présents dans le frigo, une alerte est envoyée sur l'interface utilisateur.
+
+
+# **Description des objectifs et tâches en analyse de données, positionnement par rapport aux tâches d'analyse de données (supervisé / non supervisé, etc) : **
+
+Dans le cadre de notre projet, les analyses de données doivent nous permettre d’avoir un aperçu de l’évolution de l’humidité et de la température en fonction du temps. Ces données nous permettront de contrôler s’il y a eu un problème avec le réfrigérateur et de remonter à l’heure de ce problème.
+Mais ce n’est pas tout car comme expliqué précédemment, une partie importante du projet se concentre sur le capteur de codes-barres. Ainsi, ayant scanné les produits et les ayant archivés dans notre base de données, nous pourrons effectuer des statistiques sur les produits qui sont dans le réfrigérateur. A l'aide du code barre et d'une API faisant le lien avec la base de donnée "Open food fact", nous avons pu récupérer de nombreuses données sur les produit, notamment leur nom, leur masse/volume, leurs valeurs nutritionnelles pour 100 g/mL, leur quantité. Ces données nous permettront de répondre aux questions suivantes:
+Combien de Kcal représentent-ils ? Quelle est la contribution de chaque produit aux apports nutritionnels de l’utilisateur ? Quelles sont les proportions des différentes valeurs nutritionnelles (protéines, glucides, matières grasses …) dans le réfrigérateur ? …
+
+Le capteur de luminosité nous permettra également de tracer la durée d’ouverture du réfrigérateur en fonction du temps.
+
+Tous ces aspects rentrent dans le domaine du « quantified -self ». L’utilisateur pourra suivre sa consommation à la trace.
+
+
+Dans un premier temps, nous nous connectons à la base de données en utilisant la librairie "MariaDB".
+Nous changeons la langue de l'environnement en anglais afin de pouvoir rechercher les erreurs sur internet quand il y en a.
+Les librairies utilisées seront "RMariaDB", "lubridate", "scales", "ggplot2", "plotly", "tidyverse", "DBI".
+Nous changeons la timezone de l'environnement à "UTC" en raison de problèmes rencontrés avec la librairie "plotly" permettant de rendre nos graphiques interactifs.
+
+```{r, echo = FALSE, include=FALSE}
+rm(list = ls())
+Sys.setenv(LANG = "en")
+Sys.setenv(TZ = "UTC")
+library(RMariaDB)
+library(lubridate)
+library(scales)
+library(ggplot2)
+library(plotly)
+library(tidyverse)
+library(DBI)
+
+con = dbConnect(RMariaDB::MariaDB(),
+                host ="fimi-bd-srv1.insa-lyon.fr",
+                database = "G221_A_BD1", dbname="G221_A_BD1", 
+                user = "G221_A",
+                password = "G221_A", 
+                port = 3306)
+dbListTables(con)
+
+```
+
+# **Contrôle de l'ouverture de la porte**
+
+Dans cette partie, on souhaite contrôler les durées d'ouverture de la porte. Pour cela, on va faire un diagramme en bâton qui représente la durée d'ouverture en fonction de la date.
+
+Pour ce faire, on devra soustraire les datetime de la table OuverturePorte qui se suivent, car les mesures sont envoyées à la base de données dès que la porte s'ouvre ou se ferme. Une ouverture de la porte sera traduit par un 1 dans la colonne porteOuverte, une fermeture de la porte sera traduit par un 0 dans la colonne porteOuverte.
+
+Puisque nous soustrayons les lignes deux à deux, nous voulons que la premiere valeur de la colonne porteOuverte soit 0 et que la dernière soit 1.
+
+Nous soustrayons alors les datetime des lignes deux à deux avec la méthode dureeOuverture = -diff(as.matrix(betterData2$dateOuverture)).
+
+Maintenant, notre première dataFrame contenant toutes les mesures possède un nombre de lignes de n tandis que la matrice dureeOuverture contient n-1 lignes. Il faut donc supprimer la première ligne de la dataFrame, puis créer une seconde dataframe contenant la dateOuverture de la première dataframe et la dureeOuverture de la matrice. La date correspondant à l'ouverture/fermeture de la porte sera alors la dateOuverture (date à laquelle la porte a été ouverte) et elle sera associée à la durée d'ouverture de la porte.
+
+Il ne reste plus qu'à tracer le diagramme, en choisissant une plage de temps correspondant aux dates précisées au début du notebook.
+
+Ayant décidé d'utiliser la fonction plotly pour avoir un graphe interactif, nous avons décidé de rendre la largeur de la colonne représentant la durée d'ouverture proportionnelle à sa valeur. En faisant cela, on rend les barres correspondant aux valeurs importantes plus épaisses, et il est donc plus facile de bien positionner la souris sur la barre pour que les valeurs s'affichent (grâce à la fonction 'ggplotly'). Nous aurions également pu donner une largeur fixe plus large à chaque barre en donnant par exemple width = 10 et les barres auraient été assez large pour qu'il soit simple de se mettre dessus avec la souris, mais le problème de cela est que lorsque l'on ouvre plusieurs fois la porte pendant un temps court et sur une plage de temps faible, les barres se seraient superposées et la lisibilité aurait été amoindrie.
+
+Pour ce faire, nous avons choisi de prendre deux dates. La date de fin sera dynamique et correspondra à la datetime du système à laquelle on ajoute 7200 secondes car on est dans la timezone "UTC+2" (il a été expliqué précédemment que l'on a été obligé de mettre l'environnement en timezone "UTC" pour le bon fonctionnement de la librairie plotly). Ensuite, nous soustrayons le nombre de secondes souhaitées (604800 pour une semaine) à la date de fin pour que la date de début soit également dynamique.
+
+Une seconde plage de dates a été choisie du 22-06-03 7h30 au 22-06-03 14h, plage de temps sur laquelle des mesures ont été effectuées dans le réfrigérateur. Ces dates sont fixes.
+
+Afin d'utiliser les dates crées dans la requête sql, nous devons dans un premier temps les convertir en String. Nous devons ensuite concaténer la requête et les dates.
+
+On utilise ensuite la méthode dbGetQuery() pour récupérer les données en une seule méthode (elle appelle les méthodes dbSendQuery(), dbFetch() et dbClearResult(), ce qui est indispensable si l'on veut éviter la saturation de la mémoire.)
+
+```{r}
+dateFin = as_datetime(Sys.time() + 7200,)
+dateDebut = as_datetime(dateFin - 604800)
+
+dateDebutTemp = as_datetime("2022-06-03 7:30:00")
+dateFinTemp = as_datetime("2022-06-03 14:00:00")
+
+dateDebutTempS = format(dateDebutTemp, format = "%Y-%m-%d %H:%M:%S")
+dateFinTempS = format(dateFinTemp, format = "%Y-%m-%d %H:%M:%S")
+
+dateFinStatic = as_datetime("2022-06-01 23:59:59")
+dateDebutStatic = as_datetime("2022-05-25 00:00:01")
+
+
+dateDebutString = format(dateDebut, format="%Y-%m-%d %H:%M:%S")
+dateFinString = format(dateFin, format = "%Y-%m%-%d %H:%M:%S")
+
+
+timeline = c(dateDebut, dateFin)
+timelineTemp = c(dateDebutTemp, dateFinTemp)
+
+query = "SELECT * FROM OuverturePorte ORDER BY dateOuverture DESC"
+donnesOuverture = dbGetQuery(con, query)
+
+betterData2 = data.frame("idOuverture" = donnesOuverture$idOuverture, "porteOuverte" = donnesOuverture$porteOuverte, "dateOuverture" = donnesOuverture$dateOuverture)
+
+if (betterData2[1,]$porteOuverte == 1){
+  betterData2 = betterData2[-c(1),]
+}
+
+if(tail(betterData2$porteOuverte, 1) == 0){
+  betterData2 = betterData2[-c(nrow(betterData2)),]
+}
+
+dureeOuverture = -diff(as.matrix(betterData2$dateOuverture))
+
+betterData2 = betterData2[-c(1),]
+
+lt4 = data.frame("dateOuverture" = betterData2$dateOuverture, dureeOuverture)
+
+
+pPorte <- ggplot(lt4, aes(x = dateOuverture, y = dureeOuverture)) +
+  geom_col(width = dureeOuverture/10, color = "black", fill = "white") +
+  theme(axis.text.x = element_text(angle = 90,hjust = 1)) +
+  scale_x_datetime(labels = date_format("%m-%d %H:%M:%S", tz = "UTC"), limits = timeline) +
+  ylab("durée d'ouverture (en secondes)") +
+  xlab("date") +
+  geom_hline(yintercept = 300,linetype="dashed", color = "red")
+
+ggplotly(pPorte)
+```
+
+Les valeurs représentées ici correspondent à des mesures en dehors du refrigérateur. Pour simuler la fermeture du refrigérateur, on mettait la main sur le capteur de luminosité. Il y a donc des grandes durées d'ouverture, et la limite fixée à 300 secondes (5minutes) se retrouve confondue avec l'axe des abscisses. Pour une utilisation normale, les durées d'ouverture seraient beaucoup plus faibles.
+
+
+# **Température et humidité**
+
+Nous allons maintenant nous pencher sur l'évolution de la température et de l'humidité en fonction du temps. Ici, nous traçons simplement les valeurs en fonction du temps.
+
+```{r}
+qtemperature <- paste("SELECT * FROM Mesure WHERE idCapteur = 1 AND dateMesure > '",dateDebutTempS,"' AND dateMesure < '",dateFinTempS,"' ORDER BY dateMesure DESC")
+
+mesuresTemperature = dbGetQuery(con, qtemperature)
+dfTemperature = data.frame(mesuresTemperature)
+
+
+p <- ggplot(dfTemperature, aes(x = dfTemperature$dateMesure, y = dfTemperature$valeur)) +
+  geom_point() + 
+  theme(axis.text.x = element_text(angle = 90,hjust = 1)) +
+  scale_x_datetime(labels = date_format("%H:%M:%S"), limits = timelineTemp) + 
+  ggtitle("Graphique de l'evolution de la temperature en fonction du temps") +
+  xlab("temps") + 
+  ylab("temperature (en °)") + 
+  scale_y_continuous(limits = c(0,10)) +
+  geom_hline(yintercept = 3.5,linetype="dashed", color = "red")
+
+
+ggplotly(p)
+
+```
+
+Les pointillés rouges correspondent à la consigne du réfrigérateur.
+On observe une certaine saisonnalité dans les valeurs de températures à l'intérieur du réfrigérateur. Cela correspond au fait qu'il ne refroidisse pas en continu, mais par à-coups. De plus, les valeurs se trouvent bien entre 0 et 7.5 degrés, ce qui est normal pour un réfrigérateur.
+
+```{r}
+qHumidite <- paste("SELECT * FROM Mesure WHERE idCapteur = 2 AND dateMesure > '",dateDebutTempS,"' AND dateMesure < '",dateFinTempS,"' ORDER BY dateMesure DESC")
+
+mesuresHumidite = dbGetQuery(con, qHumidite)
+
+dfHumidite = data.frame("mesure" = mesuresHumidite$valeur, "dateMesure" = mesuresHumidite$dateMesure)
+
+p2 <- ggplot(dfHumidite, aes(x = dateMesure, y = mesure, text = "clarity")) + 
+  geom_point() + 
+  theme(axis.text.x = element_text(angle = 90,hjust = 1)) +
+  scale_x_datetime(labels = date_format("%H:%M:%S"), limits = timelineTemp) + 
+  scale_y_continuous(limits = c(0,100)) +
+  ggtitle("Graphique de l'évolution de l'humidité en fonction du temps") +
+  xlab("temps") + 
+  ylab("humidite (en %)")
+
+ggplotly(p2)
+```
+
+On observe que les variations d'humidité sont corrélées à celles de la température. On peut donc supposer que les causes de ces saisonnalitées sont les mêmes. Le plat au début de la courbe correspond au temps que le capteur met à s'adapter aux conditions du réfrigérateur. En effet, sa réactivité laisse à désirer.
+
+# **boxplots sur l'humidité et la température**
+
+Il s'agit maintenant d'observer la répartition de ces valeurs. Pour ce faire, nous avons décidé d'utiliser la méthode 'boxplot' de base de Rstudio. 
+
+```{r}
+vecteurTemperature = dfTemperature$valeur
+summary(vecteurTemperature)
+boxplot(vecteurTemperature, col = "red",ylab = "Température (en °C)", main = "boîte à moustache des valeurs de température")
+```
+
+Pour ce qui est de la température, on remarque qu'elle vaire de 1.440°C à 5.440°C. La moitié des valeurs sont entre 2.78°C et 4.560°C, intervalle qui reste assez fin. On peut donc conclure que le réfrigérateur remplit relativement bien son rôle de régulateur de températures.
+
+```{r}
+vecteurHumidite = dfHumidite$mesure
+summary(vecteurHumidite)
+boxplot(vecteurHumidite, col = "blue", ylab = "Humidité (en %)", main = "boîte à moustache des valeurs d'humidité")
+```
+
+La boîte à moustaches montre que l'humidié varie de 36.61% à 67.7% avec comme quartiles : q1 = 42.25%, q2 = 49.54%, q3 = 54.52%. On a donc la moitié des valeurs comprises entre 42.25% et 54.52%, ce qui rend l'humidité assez étendue. Bien que les variations de ces valeurs soient cohérentes, les valeurs à proprement parler sont à prendre avec des pincettes car le capteur d'humidité ne renvoyait pas toujours les valeurs attendues.
+
+# **Proportions des contributions des différents aliments aux apports caloriques de l'utilisateur**  
+
+Etudions dans un premier temps ce qu'a mangé l'utilisateur sur une certaine durée.
+
+Ici, l'objectif est que le code donne à l'utilisateur son apport d'énergie sur la semaine, puis journalier en le divisant par 7, puis le compare à l'apport recommandé. Cependant, les recommandations varient en fonction du sexe de l'individu. C'est pourquoi nous avons décidé de créer un boolean homme et d'adapter le code en fonction de la valeur de la variable 'homme' avec des 'if'.
+
+```{r}
+
+homme = TRUE
+apportMoyen = 0
+
+qtest2 = paste("SELECT DISTINCT Produit.codeBarre, nomProduit, energieKcal, quantite, masse FROM Produit, CodeBarre WHERE CodeBarre.codeBarre = Produit.CodeBarre AND ajout = 0 AND dateCodeBarre > '", dateDebutString,"' AND dateCodeBarre < '",dateFinString,"' GROUP BY Produit.codeBarre")
+
+data = dbGetQuery(con,qtest2)
+
+betterData = data.frame("nomProduit" = data$nomProduit, "quantite" = data$quantite, "energie " = data$energieKcal, "masse" = data$masse)
+
+Kcalories = round(c(sum(betterData$energie*betterData$quantite/100*betterData$masse)))
+KcaloriesJournalier = round(Kcalories/7)
+
+KcaloriesDifference = 0
+sexe = "allo"
+if(homme){
+  apportMoyen = 2600
+  KcaloriesDifference = round(abs(KcaloriesJournalier - apportMoyen))
+  sexe = "hommes"
+} else{
+  apportMoyen = 2100
+  KcaloriesDifference = round(abs(KcaloriesJournalier - apportMoyen))
+  sexe = "femmes"
+}
+
+cat("l'utilisateur a consommé", Kcalories, "kcal du", as.character(dateDebut),"au", as.character(dateFin), ", ce qui fait une moyenne de", KcaloriesJournalier ,"Kcal par jours, soit une différence de ", KcaloriesDifference, "Kcal avec l'apport calorique moyen pour les", sexe, "(apport moyen de", apportMoyen, "Kcal)")
+```
+
+# **Aliments y ayant contribué**
+
+Maintenant que nous possédons les valeurs énergétiques globales, il s'agit de représenter la contribution des éléments présents dans le réfrigérateur à cet apport énergétique.
+
+Pour cela, nous avons décidé de représenter la proportion des différents éléments à l'aide d'une 'piechart'.
+
+Dans un premier temps, il nous faut calculer les proportions de chaque produit dans l'apport énergétique total. Pour cela, on prend l'énergie du produit pour 100g, on le multiplie par la quantité, on le divise par 100, puis on multiplie par la masse avant de diviser par l'énergie totale. On regroupe ces données dans une dataframe afin de pouvoir utiliser la librairie ggplot par la suite pour avoir plus de fonctionnalités sur le graphe créée.
+
+Pour que le graphe soit lisible, nous avons décidé de regrouper tous les éléments ayant une participation inférieure à 1% dans une catégorie "Autres".
+Pour faire cette catégorie, on place tous les produits concernés dans une seconde dataframe, puis on les supprime de la première. On crée une troisième dataframe dans laquelle on associe à la catégorie "Autres" la somme des proportions de tous les produits de cette catégorie. On fusionne enfin les dataframes 1 et 3 dans une dataframe 4 pour avoir toutes les catégories que l'on veut représenter sur la piechart.
+
+Avant de la plot, on supprime tous les produits ayant une proportion nulle.
+
+On plot enfin la piechart avec la fonction ggplot.
+```{r}
+pieMaterial = data.frame("nomProduit" = betterData$nomProduit, "props" = betterData$quantite*betterData$energie/100*betterData$masse/Kcalories)
+
+dfAutresCal= pieMaterial[pieMaterial$props < 0.03,]
+
+pieMaterial= pieMaterial[!(pieMaterial$props < 0.03),]
+
+
+somme = sum(dfAutresCal$props)
+
+newRow2 = data.frame("nomProduit" =  "Autres", "props" = somme)
+
+pieMaterialTotal = rbind(pieMaterial, newRow2)
+
+
+pieMaterialTotal = pieMaterialTotal %>%
+  arrange(desc(pieMaterialTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(pieMaterialTotal$props) - 0.5*props)
+
+
+pieMaterialTotal = pieMaterialTotal[!(pieMaterialTotal$props == 0),]
+
+
+ggplot(pieMaterialTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport énergétique")
+```
+
+
+Nous allons maintenant tracer les piecharts des contributions des produits du réfrigérateur aux apports nutritionnels. Nous allons les tracer pour les protéines, les fibres, les sucres, les matières grasses, les glucides et les sels. Le procédé sera exactement le même que pour la première piechart (sur l'énergie).
+
+# **Part des différents aliments à l'apport en protéine**
+
+
+```{r}
+qdonneesNutritonnelles = paste("SELECT DISTINCT * FROM Produit, CodeBarre WHERE CodeBarre.codeBarre = Produit.CodeBarre AND ajout = 0 AND dateCodeBarre > '", dateDebutString,"' AND dateCodeBarre < '",dateFinString,"' GROUP BY Produit.codeBarre")
+
+donneesNutritionnelles = dbGetQuery(con, qdonneesNutritonnelles)
+
+donnesProteine = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "proteines" = donneesNutritionnelles$proteines, "masse" = donneesNutritionnelles$masse)
+
+proteinesTotales = round(c(sum(donnesProteine$proteines*donnesProteine$quantite/100*donnesProteine$masse)))
+
+pieMaterialProteines = data.frame("nomProduit" = donnesProteine$nomProduit, "props" = donnesProteine$quantite*donnesProteine$proteines/100*donnesProteine$masse/proteinesTotales)
+
+dfAutres = pieMaterialProteines[pieMaterialProteines$props < 0.04, ]
+
+somme = sum(dfAutres$props)
+
+newRow = data.frame("nomProduit" =  "Autres", "props" = somme)
+
+pieMaterialProteines= pieMaterialProteines[!(pieMaterialProteines$props < 0.04),]
+pieMaterialProteinesTotal = rbind(pieMaterialProteines, newRow)
+
+
+pieMaterialProteinesTotal = pieMaterialProteinesTotal %>%
+  arrange(desc(pieMaterialProteinesTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(pieMaterialProteinesTotal$props) - 0.5*props)
+
+pieMaterialProteinesTotal = pieMaterialProteinesTotal[!(pieMaterialProteinesTotal$props == 0),]
+
+ggplot(pieMaterialProteinesTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport des protéines")
+
+```
+# **Part des différents aliments à l'apport en fibres**
+
+```{r}
+
+dataf = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "fibres" = donneesNutritionnelles$fibres, "masse" = donneesNutritionnelles$masse)
+
+fTotales = round(c(sum(dataf$fibres*dataf$quantite/100*dataf$masse)))
+
+pief = data.frame("nomProduit" = dataf$nomProduit, "props" = dataf$quantite*dataf$fibres/100*dataf$masse/fTotales)
+
+autresf = pief[pief$props < 0.05, ]
+
+sommef = sum(autresf$props)
+
+newRowf = data.frame("nomProduit" =  "Autres", "props" = sommef)
+
+pief = pief[!(pief$props < 0.05),]
+piefTotal = rbind(pief, newRowf)
+
+
+piefTotal = piefTotal %>%
+  arrange(desc(piefTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(piefTotal$props) - 0.5*props)
+
+piefTotal = piefTotal[!(piefTotal$props == 0),]
+
+ggplot(piefTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport en fibres")
+
+```
+
+
+# **Part des différents aliments à l'apport en sucre**
+
+```{r}
+
+dataf = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "sucres" = donneesNutritionnelles$sucres, "masse" = donneesNutritionnelles$masse)
+
+sTotales = round(c(sum(dataf$sucres*dataf$quantite/100*dataf$masse)))
+
+pieSugar = data.frame("nomProduit" = dataf$nomProduit, "props" = dataf$quantite*dataf$sucres/100*dataf$masse/sTotales)
+
+autresSugar = pieSugar[pieSugar$props < 0.02, ]
+
+sommeSugar = sum(autresSugar$props)
+
+newRowSugar = data.frame("nomProduit" =  "Autres", "props" = sommeSugar)
+
+pieSugar = pieSugar[!(pieSugar$props < 0.02),]
+pieSugarTotal = rbind(pieSugar, newRowSugar)
+
+
+pieSugarTotal = pieSugarTotal %>%
+  arrange(desc(pieSugarTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(pieSugarTotal$props) - 0.5*props)
+
+pieSugarTotal = pieSugarTotal[!(pieSugarTotal$props == 0),]
+
+ggplot(pieSugarTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport en sucre")
+
+```
+
+# **Part des différents aliments à l'apport en matières grasses**
+
+```{r}
+
+dataf = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "matieresGrasses" = donneesNutritionnelles$matieresGrasses, "masse" = donneesNutritionnelles$masse)
+
+mgTotales = round(c(sum(dataf$matieresGrasses*dataf$quantite/100*dataf$masse)))
+
+piemg = data.frame("nomProduit" = dataf$nomProduit, "props" = dataf$quantite*dataf$matieresGrasses/100*dataf$masse/mgTotales)
+
+autresmg = piemg[piemg$props < 0.03, ]
+
+sommemg = sum(autresmg$props)
+
+newRowmg = data.frame("nomProduit" =  "Autres", "props" = sommemg)
+
+piemg = piemg[!(piemg$props < 0.03),]
+piemgTotal = rbind(piemg, newRowmg)
+
+
+piemgTotal = piemgTotal %>%
+  arrange(desc(piemgTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(piemgTotal$props) - 0.5*props)
+
+piemgTotal = piemgTotal[!(piemgTotal$props == 0),]
+
+ggplot(piemgTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport en matières grasses")
+
+```
+
+# **Part des différents aliments à l'apport en glucides**
+
+```{r}
+
+dataf = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "glucides" = donneesNutritionnelles$glucides, "masse" = donneesNutritionnelles$masse)
+
+glucidesTotales = round(c(sum(dataf$glucides*dataf$quantite/100*dataf$masse)))
+
+pieGlucides = data.frame("nomProduit" = dataf$nomProduit, "props" = dataf$quantite*dataf$glucides/100*dataf$masse/glucidesTotales)
+
+autresGlucides = pieGlucides[pieGlucides$props < 0.03, ]
+
+sommeGlucides = sum(autresGlucides$props)
+
+newRowGlucides = data.frame("nomProduit" =  "Autres", "props" = sommeGlucides)
+
+pieGlucides = pieGlucides[!(pieGlucides$props < 0.03),]
+pieGlucidesTotales = rbind(pieGlucides, newRowGlucides)
+
+
+pieGlucidesTotales = pieGlucidesTotales %>%
+  arrange(desc(pieGlucidesTotales$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(pieGlucidesTotales$props) - 0.5*props)
+
+pieGlucidesTotales = pieGlucidesTotales[!(pieGlucidesTotales$props == 0),]
+
+ggplot(pieGlucidesTotales, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport en glucides")
+
+```
+
+# **Part des différents aliments à l'apport en sel**
+
+```{r}
+
+dataf = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "quantite" = donneesNutritionnelles$quantite, "sel" = donneesNutritionnelles$sel, "masse" = donneesNutritionnelles$masse)
+
+selTotal = round(c(sum(dataf$sel*dataf$quantite/100*dataf$masse)))
+
+pieSel = data.frame("nomProduit" = dataf$nomProduit, "props" = dataf$quantite*dataf$sel/100*dataf$masse/selTotal)
+
+autresSels = pieSel[pieSel$props < 0.04, ]
+
+sommeSels = sum(autresSels$props)
+
+newRowSels = data.frame("nomProduit" =  "Autres", "props" = sommeSels)
+
+pieSel = pieSel[!(pieSel$props < 0.04),]
+pieSelTotal = rbind(pieSel, newRowSels)
+
+
+pieSelTotal = pieSelTotal %>%
+  arrange(desc(pieSelTotal$nomProduit)) %>%
+  mutate(lab.ypos = cumsum(pieSelTotal$props) - 0.5*props)
+
+pieSelTotal = pieSelTotal[!(pieSelTotal$props == 0),]
+
+ggplot(pieSelTotal, aes(x = "", y = props, fill = nomProduit)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(props, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle("Contribution des aliments mangés la semaine passée à l'apport en sel")
+
+```
+
+Nous avons les contributions des différents produits aux apports nutritionnels. Il s'agirait désormais d'étudier la répartition des contributions des différents nutriments.
+
+# **Proportions des valeurs nutritonnelles mangées avec catégorie "Autres"**
+
+On possède les valeurs nutritionnelles des différents nutriments pour chaque produit pour 100g.
+On calcule alors les valeurs nutritionnelles totales pour chaque nutriments avec la méthode sum().
+
+Cependant, nous n'avons pas tous les nutriments dans le tableau car tous les nutriments ne sont pas intéressants à étudier. C'est pourquoi nous avons décidé de faire une catégorie "Autres" dans laquelle nous calculons les valeurs nutritionnelles de tous les autres aliments. Les valeurs nutritionnelles étant données pour 100g, il suffit faire 100-(somme des valeurs nutritionnelles renseignées) pour avoir la valeur nutritionnelle de la catégorie "Autres" pour un produit donné. On calcule enfin le total (pour tous les produits) de la catégorie autres comme pour toutes les autres catégories.
+
+On fait alors la somme pour tous les nutriments pour avoir le total et on calcul les proportions pour chaque nutriment.
+
+On trace enfin la piechart.
+```{r}
+datafVerif = data.frame("nomProduit" = donneesNutritionnelles$nomProduit, "matieresGrasses" = donneesNutritionnelles$matieresGrasses, "glucides" = donneesNutritionnelles$glucides, "fibres" = donneesNutritionnelles$fibres, "proteines" = donneesNutritionnelles$proteines, "sels" = donneesNutritionnelles$sel)
+
+datafAutrement = data.frame("nomProduit" =donneesNutritionnelles$nomProduit,"Autres" = (100-(donneesNutritionnelles$matieresGrasses + donneesNutritionnelles$glucides + donneesNutritionnelles$fibres + donneesNutritionnelles$proteines + donneesNutritionnelles$sel))*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse )
+
+
+datafTotal = data.frame("matieresGrasses" = round(c(sum(donneesNutritionnelles$matieresGrasses*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "glucides" = round(c(sum(donneesNutritionnelles$glucides*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "fibres" = round(c(sum(donneesNutritionnelles$fibres*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "proteines" = round(c(sum(donneesNutritionnelles$proteines*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "sel" = round(c(sum(donneesNutritionnelles$sel*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "Autres" = c(sum(datafAutrement$Autres)))
+
+iLoveThomas = datafTotal$matieresGrasses + datafTotal$glucides + datafTotal$fibres + datafTotal$proteines + datafTotal$sel + datafTotal$Autres
+
+datafTotal2 = data.frame("matieresGrasses" = datafTotal$matieresGrasses/iLoveThomas, "glucides" = datafTotal$glucides/iLoveThomas, "fibres" = datafTotal$fibres/iLoveThomas, "proteines" = datafTotal$proteines/iLoveThomas, "sel" = datafTotal$sel/iLoveThomas, "Autres" = datafTotal$Autres/iLoveThomas)
+
+
+datafPie = data.frame(elements = c("matieresGrasses", "glucides","fibres", "proteines" ,"sel", "Autres"), ProportionsPie = c(datafTotal2$matieresGrasses, datafTotal2$glucides, datafTotal2$fibres, datafTotal2$proteines, datafTotal2$sel, datafTotal2$Autres))
+
+
+ggplot(datafPie, aes(x = "", y = ProportionsPie, fill = elements)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(ProportionsPie, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle(paste("Proportions des la consommation des différentes valeurs nutritionnelles avec", "\n", "catégorie autres "))
+```
+
+On remarque que la catégorie "Autres" est bien trop grosse. Il y a donc une grande partie de la masse du produit qui n'est pas due aux nutriments qui nous intéressent. On va maintenant tracer la piechart sans cette catégorie "Autre" (on procède de la même manière)
+
+# **Proportion des valeurs nutritionnelles mangées sans catégorie "Autres"**
+
+```{r}
+
+datafTotal4 = data.frame("matieresGrasses" = round(c(sum(donneesNutritionnelles$matieresGrasses*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "glucides" = round(c(sum(donneesNutritionnelles$glucides*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "fibres" = round(c(sum(donneesNutritionnelles$fibres*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "proteines" = round(c(sum(donneesNutritionnelles$proteines*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))), "sel" = round(c(sum(donneesNutritionnelles$sel*donneesNutritionnelles$quantite/100*donneesNutritionnelles$masse))))
+
+iLoveThomas2 = datafTotal4$matieresGrasses + datafTotal4$glucides + datafTotal4$fibres + datafTotal4$proteines + datafTotal4$sel
+
+datafTotal3 = data.frame("matieresGrasses" = datafTotal4$matieresGrasses/iLoveThomas2, "glucides" = datafTotal4$glucides/iLoveThomas2, "fibres" = datafTotal4$fibres/iLoveThomas2, "proteines" = datafTotal4$proteines/iLoveThomas2, "sel" = datafTotal4$sel/iLoveThomas2)
+
+
+datafPie2 = data.frame(elements = c("matieresGrasses", "glucides","fibres", "proteines" ,"sel"), ProportionsPie = c(datafTotal3$matieresGrasses, datafTotal3$glucides, datafTotal3$fibres, datafTotal3$proteines, datafTotal3$sel))
+
+
+ggplot(datafPie2, aes(x = "", y = ProportionsPie, fill = elements)) +
+  geom_bar(width = 1, stat = "identity", color ="white") +
+  geom_text(aes(label = scales::percent(ProportionsPie, accuracy=1)), position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  theme_void() + 
+  ggtitle(paste("Proportions des la consommation des différentes valeurs nutritionnelles sans","\n", "catégorie autres "))
+```
+
+On remarque que l'utilisateur a principalement consommé des glucides, des matières grasses et des protéines. Il faudrait consommer plus de fibres.
+
+# **Nutriscore**
+
+  Nous allons maintenant essayer d'afficher le nombre de produit présent pour chaque catégorie du NutriScore qu'il y a dans le réfrigérateur.
+  
+  On décide de représenter cela dans un histogramme que l'on trace à l'aide de la librairie 'ggplot2', on trace une ligne verticale correspondant à la moyenne des NutriScores.
+
+```{r}
+queryNutriScore <- "SELECT nutriscore FROM CodeBarre, Produit WHERE Produit.codeBarre = CodeBarre.codeBarre"
+ListeNutriLettres = dbGetQuery(con, queryNutriScore)
+ListeNutriLettres = t(na.omit(ListeNutriLettres))
+ListeNutriLettres
+ListeNutriChiffres = c()
+for (i in ListeNutriLettres){
+  if (i=="a"){
+    ListeNutriChiffres[length(ListeNutriChiffres)+1] = 1
+  } else if (i == "b") {
+    ListeNutriChiffres[length(ListeNutriChiffres)+1] = 2
+  } else if (i == "c"){
+    ListeNutriChiffres[length(ListeNutriChiffres)+1] = 3
+  } else if (i == "d"){
+    ListeNutriChiffres[length(ListeNutriChiffres)+1] = 4
+  } else if (i == "e"){
+    ListeNutriChiffres[length(ListeNutriChiffres)+1] = 5
+  }
+}
+MoyenneNutriscore = mean(ListeNutriChiffres)
+MoyenneNutriscore
+
+queryNbProduitNutri = "SELECT nutriscore, SUM(quantite) as NbProduit FROM Produit WHERE nutriscore IS NOT NULL GROUP BY nutriscore;"
+ListeNbProduitNutri = dbGetQuery(con, queryNbProduitNutri)
+
+df <- data.frame(NutriScore=toupper(ListeNbProduitNutri$nutriscore), NbProduit=ListeNbProduitNutri$NbProduit)
+# Barplot basique
+p<-ggplot(data=df, aes(x=NutriScore, y=NbProduit)) +
+  geom_bar(stat="identity") +
+  xlab("NutriScore") + ylab("Nombre de Produit") +
+  geom_vline(xintercept=MoyenneNutriscore, linetype="dashed", color = "black", size=1) +
+  ggtitle("Nombre de Produit en fonction du NutriScore") +
+  theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+  annotate(geom="text", x=MoyenneNutriscore, y=max(ListeNbProduitNutri$NbProduit) + 2, label="Score Moyen", color="black")
+ggplotly(p)
+```
+
+Le nutriscore des produits dans le réfrigérateur est globalement bon.
+
+# **NovaScore**
+
+Nous procédons de la même manière avec le NovaScore
+
+```{r}
+queryMoyNovaScore <- "SELECT novascore FROM Produit, CodeBarre WHERE Produit.codeBarre = CodeBarre.codeBarre"
+ListeNova = dbGetQuery(con, queryMoyNovaScore)
+ListeNova = t(na.omit(ListeNova))
+MoyenneNovaScore = mean(ListeNova)
+
+queryNbProduitNova = "SELECT novascore, SUM(quantite) as NbProduit FROM Produit WHERE novascore IS NOT NULL GROUP BY novascore;"
+ListeNbProduitNova = dbGetQuery(con, queryNbProduitNova)
+
+df <- data.frame(NovaScore=ListeNbProduitNova$novascore, NbProduit=ListeNbProduitNova$NbProduit)
+# Barplot basique
+p<-ggplot(data=df, aes(x=NovaScore, y=NbProduit)) +
+  geom_bar(stat="identity") +
+  xlab("NovaScore") + ylab("Nombre de Produit") +
+  geom_vline(xintercept=MoyenneNovaScore, linetype="dashed", color = "black", size=1) +
+  ggtitle("Nombre de Produit en fonction du NovaScore") +
+  theme(plot.title = element_text(color="black", size=14, face="bold.italic")) +
+  annotate(geom="text", x=MoyenneNovaScore, y=max(ListeNbProduitNova$NbProduit) + 2, label="Score Moyen", color="black")
+ggplotly(p)
+```
+
+Le novascore des produits de notre réfrigérateur est globalement assez mauvais.
+
+
+
